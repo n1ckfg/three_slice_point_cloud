@@ -2,34 +2,36 @@
 <html>
 
     <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+        <link type="text/css" rel="stylesheet" href="./css/main.css">
         <script src="./js/libraries/threejs/three.min.js"></script>
         <script src="./js/libraries/threejs/controls/OrbitControls.js"></script>
     </head>
 
     <body>
         <script>
-            const url = "./files/20180527_111027.xyz";
+            "use strict";
 
-            let scene, camera, renderer, controls;
+            const renderer = new THREE.WebGLRenderer({ antialiasing: false, alpha: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            document.body.appendChild(renderer.domElement);
+
+            const scene = new THREE.Scene();
+
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+            const url = "./files/20180527_111027.xyz";
 
             let pointCloud, contourSlice;
 
-            const middlePlanePosition = 0;
+            let middlePlanePosition = 0;
 
-            function init() {
-                scene = new THREE.Scene();
-
-                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                camera.position.z = 5;
-
-                renderer = new THREE.WebGLRenderer();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-                document.body.appendChild(renderer.domElement);
-
-                controls = new THREE.OrbitControls(camera, renderer.domElement);
-
-                loadPointCloud();
-            }
+            let startTime, time;
 
             function loadPointCloud() {
                 const loader = new THREE.FileLoader();
@@ -52,8 +54,6 @@
                 contourSlice = new THREE.Mesh(planeGeometry, planeMaterial);
                 contourSlice.position.y = middlePlanePosition;
                 scene.add(contourSlice);
-
-                projectPointCloudOntoSlice();
             }
 
             function projectPointCloudOntoSlice() {
@@ -75,14 +75,25 @@
                 contourSlice.geometry = sliceGeometry;
             }
 
-            function animate() {
-                requestAnimationFrame(animate);
-                controls.update();
-                renderer.render(scene, camera);
+            function init() {
+                loadPointCloud();
+                animate();
+                startTime = Date.now();
             }
 
-            init();
-            animate();
+            function animate() {
+                time = Date.now() - startTime;
+
+                controls.update();
+                renderer.render(scene, camera);
+                requestAnimationFrame(animate);
+
+                middlePlanePosition = 0;
+                console.log(middlePlanePosition);
+                projectPointCloudOntoSlice();
+            }
+
+            window.onload=init;
         </script>
     </body>
 
