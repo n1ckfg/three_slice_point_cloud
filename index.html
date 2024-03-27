@@ -31,7 +31,7 @@
 
             let middlePlanePosition = 0;
 
-            let startTime, time;
+            let startTime;
 
             function loadPointCloud() {
                 const loader = new THREE.FileLoader();
@@ -42,6 +42,7 @@
                         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
                         const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
                         pointCloud = new THREE.Points(geometry, material);
+                        pointCloud.position.set(0,-1,0);
                         scene.add(pointCloud);
 
                         createContourSlice();
@@ -78,18 +79,15 @@
             function init() {
                 loadPointCloud();
                 animate();
-                startTime = Date.now();
             }
 
             function animate() {
-                time = Date.now() - startTime;
-
                 controls.update();
                 renderer.render(scene, camera);
                 requestAnimationFrame(animate);
 
-                middlePlanePosition = 0;
-                console.log(middlePlanePosition);
+                middlePlanePosition = Math.sin(Date.now() * 0.005) * 2.0;
+                //console.log(middlePlanePosition);
                 projectPointCloudOntoSlice();
             }
 
