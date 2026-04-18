@@ -27,7 +27,8 @@
 
             const url = "./files/20180527_111027.xyz";
 
-            let pointCloud, contourSlice;
+            let pointCloud, contourSlice, pointCloudMesh, contourLines;
+            let meshIndices = null;
 
             let middlePlanePosition = 0;
 
@@ -36,9 +37,19 @@
             function loadPointCloud() {
                 const loader = new THREE.FileLoader();
                 loader.load(url, (data) => {
-                        const points = data.split('\n').map(line => line.split(' ').map(parseFloat));
+                        const coords = [];
+                        for (const line of data.split('\n')) {
+                            const parts = line.split(/[,\s]+/);
+                            if (parts.length < 3) continue;
+                            const x = parseFloat(parts[0]);
+                            const y = parseFloat(parts[1]);
+                            const z = parseFloat(parts[2]);
+                            if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                                coords.push(x, y, z);
+                            }
+                        }
                         const geometry = new THREE.BufferGeometry();
-                        const positions = new Float32Array(points.flat());
+                        const positions = new Float32Array(coords);
                         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
                         const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
                         pointCloud = new THREE.Points(geometry, material);
@@ -46,6 +57,8 @@
                         scene.add(pointCloud);
 
                         createContourSlice();
+                        buildPointCloudMesh();
+                        createContourLines();
                     });
             }
 
@@ -77,6 +90,165 @@
                 contourSlice.geometry = sliceGeometry;
             }
 
+            // Delaunay-triangulate the points on the XZ plane (Bowyer-Watson) and
+            // build a single indexed THREE.Mesh that shares the point cloud's position buffer.
+            // The resulting triangle index list is cached in meshIndices for contour extraction.
+            // Async so we can yield to the browser periodically — otherwise the long sync
+            // loop blocks the event loop and console output never flushes.
+            async function buildPointCloudMesh() {
+                const positions = pointCloud.geometry.attributes.position.array;
+                const total = positions.length / 3;
+                if (total < 3) return;
+
+                // Dedupe points with identical XZ — scans often contain multiple samples
+                // per surface position and duplicates cause Bowyer-Watson degeneracies.
+                const pts = [];
+                const seen = new Set();
+                let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+                for (let i = 0; i < total; i++) {
+                    const x = positions[i * 3], z = positions[i * 3 + 2];
+                    const key = x + ',' + z;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    pts.push({ x, z, i });
+                    if (x < minX) minX = x;
+                    if (z < minZ) minZ = z;
+                    if (x > maxX) maxX = x;
+                    if (z > maxZ) maxZ = z;
+                }
+                const n = pts.length;
+                console.log(`[mesh] ${total} raw points → ${n} unique XZ positions`);
+                const dmax = Math.max(maxX - minX, maxZ - minZ) || 1;
+                const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+                const s0 = { x: cx - 20 * dmax, z: cz - dmax,      i: -1 };
+                const s1 = { x: cx,             z: cz + 20 * dmax, i: -2 };
+                const s2 = { x: cx + 20 * dmax, z: cz - dmax,      i: -3 };
+
+                const inCircumcircle = (a, b, c, p) => {
+                    const d = 2 * (a.x * (b.z - c.z) + b.x * (c.z - a.z) + c.x * (a.z - b.z));
+                    if (Math.abs(d) < 1e-20) return false;
+                    const a2 = a.x * a.x + a.z * a.z;
+                    const b2 = b.x * b.x + b.z * b.z;
+                    const c2 = c.x * c.x + c.z * c.z;
+                    const ux = (a2 * (b.z - c.z) + b2 * (c.z - a.z) + c2 * (a.z - b.z)) / d;
+                    const uz = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+                    const rSq = (a.x - ux) * (a.x - ux) + (a.z - uz) * (a.z - uz);
+                    const pSq = (p.x - ux) * (p.x - ux) + (p.z - uz) * (p.z - uz);
+                    return pSq < rSq;
+                };
+
+                console.log(`[mesh] starting Delaunay triangulation on ${n} points`);
+                const t0 = performance.now();
+                const progressStep = Math.max(1, Math.floor(n / 20)); // log every ~5%
+
+                let triangles = [[s0, s1, s2]];
+                for (let pi = 0; pi < n; pi++) {
+                    if (pi % progressStep === 0) {
+                        const pct = ((pi / n) * 100).toFixed(1);
+                        const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+                        console.log(`[mesh] ${pi}/${n} (${pct}%) — ${triangles.length} triangles — ${elapsed}s`);
+                        // Yield so the browser can paint and console output can flush.
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                    const p = pts[pi];
+                    const keep = [];
+                    const bad = [];
+                    for (const tri of triangles) {
+                        if (inCircumcircle(tri[0], tri[1], tri[2], p)) bad.push(tri);
+                        else keep.push(tri);
+                    }
+                    const edgeCount = new Map();
+                    const edges = [];
+                    for (const tri of bad) {
+                        for (let k = 0; k < 3; k++) {
+                            const a = tri[k], b = tri[(k + 1) % 3];
+                            const key = a.i < b.i ? a.i + ',' + b.i : b.i + ',' + a.i;
+                            const existing = edgeCount.get(key);
+                            if (existing === undefined) {
+                                edgeCount.set(key, 1);
+                                edges.push({ key, a, b });
+                            } else {
+                                edgeCount.set(key, existing + 1);
+                            }
+                        }
+                    }
+                    triangles = keep;
+                    for (const e of edges) {
+                        if (edgeCount.get(e.key) === 1) triangles.push([e.a, e.b, p]);
+                    }
+                }
+
+                const indexArr = [];
+                for (const tri of triangles) {
+                    if (tri[0].i >= 0 && tri[1].i >= 0 && tri[2].i >= 0) {
+                        indexArr.push(tri[0].i, tri[1].i, tri[2].i);
+                    }
+                }
+                meshIndices = new Uint32Array(indexArr);
+                const totalSec = ((performance.now() - t0) / 1000).toFixed(2);
+                console.log(`[mesh] done: ${indexArr.length / 3} triangles in ${totalSec}s`);
+
+                const meshGeometry = new THREE.BufferGeometry();
+                meshGeometry.setAttribute('position', pointCloud.geometry.attributes.position);
+                meshGeometry.setIndex(new THREE.BufferAttribute(meshIndices, 1));
+                const meshMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x444444, wireframe: true, transparent: true, opacity: 0.25
+                });
+                pointCloudMesh = new THREE.Mesh(meshGeometry, meshMaterial);
+                pointCloudMesh.position.copy(pointCloud.position);
+                scene.add(pointCloudMesh);
+            }
+
+            function createContourLines() {
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+                const mat = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+                contourLines = new THREE.LineSegments(geom, mat);
+                contourLines.position.copy(pointCloud.position);
+                scene.add(contourLines);
+            }
+
+            // For each mesh triangle crossed by y = middlePlanePosition, emit the line
+            // segment formed by the two edge-plane intersections. One segment per triangle.
+            function drawContourLines() {
+                if (!meshIndices || !contourLines) return;
+                const positions = pointCloud.geometry.attributes.position.array;
+                const y0 = middlePlanePosition;
+                const segs = [];
+
+                for (let t = 0; t < meshIndices.length; t += 3) {
+                    const i0 = meshIndices[t], i1 = meshIndices[t + 1], i2 = meshIndices[t + 2];
+                    const idx = [i0, i1, i2];
+                    const dy = [
+                        positions[i0 * 3 + 1] - y0,
+                        positions[i1 * 3 + 1] - y0,
+                        positions[i2 * 3 + 1] - y0
+                    ];
+
+                    const hits = [];
+                    for (let k = 0; k < 3; k++) {
+                        const a = k, b = (k + 1) % 3;
+                        const da = dy[a], db = dy[b];
+                        if ((da > 0 && db < 0) || (da < 0 && db > 0)) {
+                            const tAB = da / (da - db);
+                            const ia = idx[a], ib = idx[b];
+                            const x = positions[ia * 3]     + tAB * (positions[ib * 3]     - positions[ia * 3]);
+                            const z = positions[ia * 3 + 2] + tAB * (positions[ib * 3 + 2] - positions[ia * 3 + 2]);
+                            hits.push(x, y0, z);
+                        }
+                    }
+
+                    if (hits.length === 6) {
+                        segs.push(hits[0], hits[1], hits[2], hits[3], hits[4], hits[5]);
+                    }
+                }
+
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
+                contourLines.geometry.dispose();
+                contourLines.geometry = geom;
+            }
+
             function init() {
                 loadPointCloud();
                 animate();
@@ -90,6 +262,7 @@
                 middlePlanePosition = Math.sin(Date.now() * 0.005) * 2.0;
                 //console.log(middlePlanePosition);
                 projectPointCloudOntoSlice();
+                drawContourLines();
             }
 
             window.onload=init;

@@ -31,9 +31,10 @@ The app initializes a standard Three.js pipeline:
 *   `THREE.OrbitControls` to handle mouse/touch interactions.
 
 ### 4.2. Data Loading (`loadPointCloud`)
-*   Data is loaded using `THREE.FileLoader` which fetches an `.xyz` text file containing 3D coordinates.
-*   The raw text is parsed by splitting lines and spaces, converting the string values into a flat `Float32Array`.
+*   Data is loaded using `THREE.FileLoader` which fetches an `.xyz` text file.
+*   Each line is split on commas or whitespace; the first three finite values are taken as `(x, y, z)` and appended to a flat `Float32Array`. Lines with fewer than three fields, or with non-finite values, are skipped.
 *   This array is used to construct a `THREE.BufferGeometry`, which is then rendered as a `THREE.Points` object with a simple white material.
+*   After the points are added to the scene, `buildPointCloudMesh` and `createContourLines` are invoked so the triangle mesh and contour-line object are ready before the first animation frame.
 
 ### 4.3. Dynamic Contour Slicing (`projectPointCloudOntoSlice`)
 The most significant logic in the application involves the dynamic "contour slice".
@@ -41,6 +42,18 @@ The most significant logic in the application involves the dynamic "contour slic
 *   During each frame, the `projectPointCloudOntoSlice` function iterates through all vertices of the original point cloud and keeps only those whose `y` falls within `sliceThickness` of `middlePlanePosition` — producing an actual cross-section of the cloud at that height.
 *   The surviving points retain their original `(x, y, z)` coordinates, so the slice preserves the true geometry of the cloud at that height rather than flattening it.
 *   `contourSlice` is a red `THREE.Points` object whose geometry is rebuilt each frame from the filtered vertices.
+
+### 4.4. Triangle Mesh Construction (`buildPointCloudMesh`)
+Called once, immediately after the point cloud finishes loading.
+*   Projects every point onto the XZ plane and runs a **Bowyer–Watson Delaunay triangulation** in 2D. A large super-triangle seeds the process, points are inserted one at a time, each point removes all triangles whose circumcircle contains it, and the resulting polygonal hole is re-triangulated by connecting its boundary edges to the new point.
+*   The resulting triangle index list (referencing the original 3D vertices) is cached in a module-level `Uint32Array` named `meshIndices` so it can be reused every frame without recomputation.
+*   A `THREE.Mesh` (`pointCloudMesh`) is built with these indices and **shares the same position buffer** as the point cloud — any future updates to the points would also update the mesh. It is rendered as a dim, semi-transparent wireframe so the connectivity is visible but does not dominate the scene.
+
+### 4.5. Contour Line Extraction (`createContourLines` / `drawContourLines`)
+*   `createContourLines` sets up a single empty `THREE.LineSegments` object (`contourLines`) with a bright-green material, positioned to match the point cloud.
+*   Each frame, `drawContourLines` walks `meshIndices` and, for every triangle, computes the signed vertical distance of each vertex from `middlePlanePosition`. If the plane crosses two of the triangle's three edges, it linearly interpolates the intersection points on those edges and emits exactly one line segment.
+*   Because the triangulation is precomputed, this step is O(T) per frame (one loop over the cached index buffer with no geometric search), which is what makes the contour lines cheap enough to rebuild every frame.
+*   The union of these per-triangle segments forms the isocontour of the reconstructed surface at `y = middlePlanePosition`, producing connected contour lines rather than an unordered set of points.
 
 ## 5. Execution Scripts
 
