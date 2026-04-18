@@ -38,9 +38,9 @@ The app initializes a standard Three.js pipeline:
 ### 4.3. Dynamic Contour Slicing (`projectPointCloudOntoSlice`)
 The most significant logic in the application involves the dynamic "contour slice".
 *   A `middlePlanePosition` variable is continuously updated in the `animate` loop using a sine wave based on the current time (`Math.sin(Date.now() * 0.005) * 2.0`). This creates a smooth oscillating vertical movement.
-*   During each frame, the `projectPointCloudOntoSlice` function iterates through all vertices of the original point cloud.
-*   It creates a new array of projected vertices where the `y` coordinate of every point is forced to match the `middlePlanePosition`.
-*   A transparent red `THREE.Mesh` (originally a Plane, later replaced completely by the projected points) acts as the visual slice.
+*   During each frame, the `projectPointCloudOntoSlice` function iterates through all vertices of the original point cloud and keeps only those whose `y` falls within `sliceThickness` of `middlePlanePosition` — producing an actual cross-section of the cloud at that height.
+*   The surviving points retain their original `(x, y, z)` coordinates, so the slice preserves the true geometry of the cloud at that height rather than flattening it.
+*   `contourSlice` is a red `THREE.Points` object whose geometry is rebuilt each frame from the filtered vertices.
 
 ## 5. Execution Scripts
 
