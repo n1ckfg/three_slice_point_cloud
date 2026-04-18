@@ -45,7 +45,8 @@
                             const y = parseFloat(parts[1]);
                             const z = parseFloat(parts[2]);
                             if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-                                coords.push(x, y, z);
+                                // File uses z-up; Three.js uses y-up — swap y and z.
+                                coords.push(x, z, y);
                             }
                         }
                         const geometry = new THREE.BufferGeometry();
@@ -259,7 +260,7 @@
                 renderer.render(scene, camera);
                 requestAnimationFrame(animate);
 
-                middlePlanePosition = Math.sin(Date.now() * 0.005) * 2.0;
+                middlePlanePosition = Math.sin(Date.now() * 0.001) * 2.0;
                 //console.log(middlePlanePosition);
                 projectPointCloudOntoSlice();
                 drawContourLines();
