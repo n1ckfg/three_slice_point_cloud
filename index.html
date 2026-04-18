@@ -38,21 +38,34 @@
                 const loader = new THREE.FileLoader();
                 loader.load(url, (data) => {
                         const coords = [];
+                        const rgb = [];
                         for (const line of data.split('\n')) {
                             const parts = line.split(/[,\s]+/);
+
                             if (parts.length < 3) continue;
                             const x = parseFloat(parts[0]);
                             const y = parseFloat(parts[1]);
                             const z = parseFloat(parts[2]);
                             if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-                                // File uses z-up; Three.js uses y-up — swap y and z.
-                                coords.push(x, z, y);
+                                coords.push(x, z, y); // File uses z-up; Three.js uses y-up — swap y and z.
+                            }
+
+                            if (parts.length < 7) continue;
+                            const r = parseFloat(parts[4]);
+                            const g = parseFloat(parts[5]);
+                            const b = parseFloat(parts[6]);
+                            if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+                                rgb.push(r, g, b);
                             }
                         }
                         const geometry = new THREE.BufferGeometry();
                         const positions = new Float32Array(coords);
                         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                        const material = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+                        if (rgb.length === coords.length) {
+                            const colors = new Float32Array(rgb);
+                            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                        }
+                        const material = new THREE.PointsMaterial({ size: 0.1, vertexColors: true });
                         pointCloud = new THREE.Points(geometry, material);
                         pointCloud.position.set(0,-1,0);
                         scene.add(pointCloud);
